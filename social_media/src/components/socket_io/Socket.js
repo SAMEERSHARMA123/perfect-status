@@ -50,6 +50,22 @@ try {
     console.log(`Socket reconnected after ${attemptNumber} attempts`);
   });
   
+  socket.on('disconnect', (reason) => {
+    console.log('Socket disconnected:', reason);
+    
+    // Attempt to reconnect
+    setTimeout(() => {
+      socket.connect();
+    }, 1000);
+  });
+  
+  // Keep-alive ping
+  setInterval(() => {
+    if (socket.connected) {
+      socket.emit('ping');
+    }
+  }, 25000);
+  
 } catch (error) {
   console.error("Error initializing socket:", error);
   // Provide a fallback socket-like object to prevent app crashes

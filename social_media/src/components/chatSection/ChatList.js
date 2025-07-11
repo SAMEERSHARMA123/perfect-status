@@ -662,13 +662,36 @@ const ChatList = ({ activeTab }) => {
     try {
       const decodedUser = GetTokenFromCookie(); // JWT se user decode
       if (decodedUser?.id) {
-        setSender({ ...decodedUser, id: decodedUser.id.toString() });
+        // Ensure ID is always a string
+        const userId = decodedUser.id.toString();
+        console.log("User authenticated with ID:", userId);
         
-        // Only emit join event once with proper ID
-        console.log("Joining socket with ID:", decodedUser.id.toString());
-        socket.emit("join", decodedUser.id.toString());
+        // Set sender with string ID
+        setSender({ ...decodedUser, id: userId });
+        
+        // Join socket room with string user ID
+        if (socket.connected) {
+          console.log("Socket connected, joining room:", userId);
+          socket.emit("join", userId);
+        } else {
+          console.log("Socket not connected yet, will join on connect");
+        }
+        
+        // Setup reconnection handler
+        const handleReconnect = () => {
+          console.log("Socket reconnected, rejoining room with ID:", userId);
+          socket.emit("join", userId);
+        };
+        
+        // Register connect handler
+        socket.on("connect", handleReconnect);
+        
+        // Cleanup
+        return () => {
+          socket.off("connect", handleReconnect);
+        };
       } else {
-        console.warn("No user ID found in token for socket join");
+        console.warn("No user ID found in token");
       }
     } catch (error) {
       console.error("Error decoding token or joining socket:", error);
@@ -677,23 +700,55 @@ const ChatList = ({ activeTab }) => {
 
   // Separate useEffect for socket events to avoid dependency issues
   useEffect(() => {
-    // Listen for online users updates
-    console.log("Setting up updateOnlineUsers listener");
+    // Handle online users updates
+    const handleOnlineUsersUpdate = (users) => {
+      try {
+        // Convert all user IDs to strings for consistent comparison
+        const stringifiedUsers = users.map(id => id.toString());
+        console.log("Online users received from server:", stringifiedUsers);
+        
+        // Create a new Set with string IDs for consistent comparison
+        const onlineSet = new Set(stringifiedUsers);
+        setOnlineUsers(onlineSet);
+        
+        // Debug log
+        console.log("Online users updated. Current user:", sender?.id);
+        console.log("Is current user online:", onlineSet.has(sender?.id?.toString()));
+      } catch (error) {
+        console.error("Error handling online users update:", error);
+      }
+    };
     
-    socket.on("updateOnlineUsers", (users) => {
-      console.log("Received online users update:", users);
-      // Create a Set for efficient lookups and avoid unnecessary re-renders
-      setOnlineUsers(new Set(users));
-      
-      // Force refresh user list to update online status
-      getUser();
-    });
+    // Handle socket reconnection
+    const handleReconnect = () => {
+      try {
+        console.log("Socket reconnected, refreshing online users");
+        // When reconnected, re-join the room with string ID
+        if (sender?.id) {
+          const userId = sender.id.toString();
+          console.log("Rejoining room with ID:", userId);
+          socket.emit("join", userId);
+        }
+      } catch (error) {
+        console.error("Error handling socket reconnection:", error);
+      }
+    };
+
+    // Register event handlers
+    socket.on("updateOnlineUsers", handleOnlineUsersUpdate);
+    socket.on("connect", handleReconnect);
+
+    // Request current online users on mount
+    if (socket.connected) {
+      console.log("Socket already connected, requesting online users");
+      socket.emit("getOnlineUsers");
+    }
 
     return () => {
-      // Clean up listener on component unmount
-      socket.off("updateOnlineUsers");
+      socket.off("updateOnlineUsers", handleOnlineUsersUpdate);
+      socket.off("connect", handleReconnect);
     };
-  }, []);
+  }, [sender?.id]);
 
 
 
@@ -782,6 +837,12 @@ const ChatList = ({ activeTab }) => {
     }
   }, [sender, receiverId]);
 
+  useEffect(() => {
+    if (sender?.id && socket?.connected) {
+      socket.emit("join", sender.id.toString());
+    }
+  }, [sender?.id]);
+
   const handleChatSelect = (user) => {
     try {
       setIsAnimating(true);
@@ -837,38 +898,114 @@ const ChatList = ({ activeTab }) => {
           withCredentials: true,
         }
       );
-      if (response?.data?.data?.sendMessage) {
-        getChat();
-      }
+      // No need to call getChat() as we'll receive the message via socket
+      // The socket will update our messages state automatically
+      
       setText(""); // Clear input after send
       setReplyToMsg(null);
     } catch (error) {
       console.error(error.response?.data?.errors?.[0]?.message || "Unknown error");
     }
   }
+  
+  // Function to delete a message
+  const deleteMessage = async (messageId) => {
+    try {
+      const query = `
+        mutation deleteMessage($messageId: ID!) {
+          deleteMessage(messageId: $messageId)
+        }
+      `;
+      
+      const variables = {
+        messageId: messageId
+      };
+      
+      const response = await axios.post(
+        "http://localhost:5000/graphql",
+        { query, variables },
+        {
+          headers: {
+            "Content-Type": "application/json",
+          },
+          withCredentials: true,
+        }
+      );
+      
+      // Close any open menus
+      setOpenMenuMsgId(null);
+      setMobileMenuMsgId(null);
+      
+      // The socket event will handle removing the message from the UI
+      console.log("Message deleted:", messageId);
+    } catch (error) {
+      console.error("Error deleting message:", error);
+      alert("Failed to delete message. Please try again.");
+    }
+  }
 
+  // Direct socket event handler
   useEffect(() => {
-    if (!socket || !selectedChat?.id) return;
-
+    if (!socket) return;
+    
     const handleIncomingMessage = (msg) => {
-      // sirf wahi message show karo jo current selected chat se related ho
-      if (
+      console.log("Socket message received:", msg);
+      
+      // If we have a selected chat and the message is related to it, update the messages
+      if (selectedChat && (
         msg.sender.id === selectedChat.id ||
         msg.receiver.id === selectedChat.id
-      ) {
-        // setMessages(prev => [...prev, msg]);
-        console.log(msg);
-
+      )) {
+        // Update messages state with the new message
+        setMessages(prev => {
+          // Check if this message is already in our list (to avoid duplicates)
+          const messageExists = prev.some(existingMsg => existingMsg.id === msg.id);
+          if (messageExists) {
+            return prev;
+          }
+          return [...prev, msg];
+        });
+        
+        // Force refresh the UI to ensure the message appears
+        setTimeout(() => {
+          const chatContainer = document.querySelector('.overflow-y-auto');
+          if (chatContainer) {
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+          }
+        }, 100);
       }
     };
 
+    // Handle message deletion events
+    const handleMessageDeleted = (deleteInfo) => {
+      console.log("Socket message deleted event received:", deleteInfo);
+      
+      // Remove the deleted message from our messages state
+      setMessages(prev => prev.filter(msg => msg.id !== deleteInfo.messageId));
+    };
+    
+    // Add socket event listeners
     socket.on("receiveMessage", handleIncomingMessage);
+    socket.on("messageDeleted", handleMessageDeleted);
 
-    // Cleanup on unmount or chat change
+    // Cleanup on unmount
     return () => {
       socket.off("receiveMessage", handleIncomingMessage);
+      socket.off("messageDeleted", handleMessageDeleted);
     };
   }, [selectedChat]);
+  
+  // Add a polling mechanism as a fallback
+  useEffect(() => {
+    if (!selectedChat || !sender) return;
+    
+    // Poll for new messages every 3 seconds
+    const intervalId = setInterval(() => {
+      getChat();
+    }, 3000);
+    
+    return () => clearInterval(intervalId);
+  }, [selectedChat, sender]);
 
   useEffect(() => {
     if (!showAttachmentBar) return;
@@ -1050,7 +1187,7 @@ const ChatList = ({ activeTab }) => {
                               style={{ right: '100%', top: '50%', transform: 'translateY(-50%)', marginRight: '8px', animation: 'fadeInLeft 0.2s' }}
                             >
                               <button className="px-4 py-2 text-left text-sm hover:bg-gray-100" type="button" onClick={() => { setReplyToMsg(msg); setOpenMenuMsgId(null); }}>Reply</button>
-                              <button className="px-4 py-2 text-left text-sm hover:bg-gray-100 text-red-500" type="button">Delete</button>
+                              <button className="px-4 py-2 text-left text-sm hover:bg-gray-100 text-red-500" type="button" onClick={() => { deleteMessage(msg.id); setOpenMenuMsgId(null); }}>Delete</button>
                               <button className="px-4 py-2 text-left text-sm hover:bg-red-100 text-red-600 font-semibold" type="button">Block</button>
                             </div>
                           )}
@@ -1078,7 +1215,7 @@ const ChatList = ({ activeTab }) => {
                               style={{ left: '100%', top: '50%', transform: 'translateY(-50%)', marginLeft: '8px', animation: 'fadeInLeft 0.2s' }}
                             >
                               <button className="px-4 py-2 text-left text-sm hover:bg-gray-100" type="button" onClick={() => { setReplyToMsg(msg); setOpenMenuMsgId(null); }}>Reply</button>
-                              <button className="px-4 py-2 text-left text-sm hover:bg-gray-100 text-red-500" type="button">Delete</button>
+                              <button className="px-4 py-2 text-left text-sm hover:bg-gray-100 text-red-500" type="button" onClick={() => { deleteMessage(msg.id); setOpenMenuMsgId(null); }}>Delete</button>
                               <button className="px-4 py-2 text-left text-sm hover:bg-red-100 text-red-600 font-semibold" type="button">Block</button>
                             </div>
                           )}
@@ -1090,7 +1227,7 @@ const ChatList = ({ activeTab }) => {
                           style={{ left: '50%', top: '50%', transform: 'translate(-50%,-50%)', animation: 'fadeInLeft 0.2s' }}
                         >
                           <button className="px-4 py-2 text-left text-sm hover:bg-gray-100" type="button" onClick={() => { setReplyToMsg(msg); setMobileMenuMsgId(null); }}>Reply</button>
-                          <button className="px-4 py-2 text-left text-sm hover:bg-gray-100 text-red-500" type="button" onClick={() => setMobileMenuMsgId(null)}>Delete</button>
+                          <button className="px-4 py-2 text-left text-sm hover:bg-gray-100 text-red-500" type="button" onClick={() => { deleteMessage(msg.id); setMobileMenuMsgId(null); }}>Delete</button>
                         </div>
                       )}
                     </div>

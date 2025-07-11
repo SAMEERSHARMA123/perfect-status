@@ -155,13 +155,17 @@ const onlineUsers = new Map();
 // Function to broadcast online users to all clients
 const broadcastOnlineUsers = async () => {
   try {
-    // Get all online users from database as backup
+    // Get all online users from database
     const dbOnlineUsers = await User.find({ isOnline: true }).select('_id');
     const dbOnlineUserIds = dbOnlineUsers.map(user => user._id.toString());
     
-    // Combine socket-connected users with database online users
+    // Get socket-connected users
+    const socketUserIds = Array.from(onlineUsers.keys());
+    
+    // Use database as source of truth, but ensure all socket-connected users are included
+    // This ensures consistency between what's in the database and what's broadcast
     const allOnlineUserIds = new Set([
-      ...Array.from(onlineUsers.keys()),
+      ...socketUserIds,
       ...dbOnlineUserIds
     ]);
     
@@ -177,7 +181,13 @@ setInterval(async () => {
   try {
     console.log("Performing periodic online users sync...");
     
-    // Sync database with socket connections
+    // Get current time
+    const now = new Date();
+    
+    // Set inactive time threshold (5 minutes)
+    const inactiveThreshold = new Date(now - 2 * 60 * 1000); // 5 minutes ago
+    
+    // 1. Update socket-connected users to be online
     for (const userId of onlineUsers.keys()) {
       await User.findByIdAndUpdate(userId, { 
         isOnline: true,
@@ -185,10 +195,27 @@ setInterval(async () => {
       });
     }
     
+    // 2. Set users who haven't been active for 5 minutes to offline
+    // This will fix users incorrectly showing as online
+    await User.updateMany(
+      { 
+        isOnline: true, 
+        lastActive: { $lt: inactiveThreshold },
+        _id: { $nin: Array.from(onlineUsers.keys()) } // Don't affect socket-connected users
+      },
+      { 
+        isOnline: false 
+      }
+    );
+    
     // Debug: Log all online users from database
-    const dbOnlineUsers = await User.find({ isOnline: true }).select('_id name');
+    const dbOnlineUsers = await User.find({ isOnline: true }).select('_id name lastActive');
     console.log("Users marked as online in database:", 
-      dbOnlineUsers.map(u => ({ id: u._id.toString(), name: u.name }))
+      dbOnlineUsers.map(u => ({ 
+        id: u._id.toString(), 
+        name: u.name,
+        lastActive: u.lastActive
+      }))
     );
     
     // Broadcast updated online users
@@ -337,7 +364,7 @@ async function startServer() {
       const socketUsers = Array.from(onlineUsers.keys());
       
       // Get database online users
-      const dbOnlineUsers = await User.find({ isOnline: true }).select('_id name');
+      const dbOnlineUsers = await User.find({ isOnline: true }).select('_id name lastActive');
       const dbOnlineUserIds = dbOnlineUsers.map(u => u._id.toString());
       
       // Force update all socket-connected users
@@ -353,11 +380,60 @@ async function startServer() {
       
       res.json({
         socketConnectedUsers: socketUsers,
-        databaseOnlineUsers: dbOnlineUsers.map(u => ({ id: u._id.toString(), name: u.name })),
+        databaseOnlineUsers: dbOnlineUsers.map(u => ({ 
+          id: u._id.toString(), 
+          name: u.name,
+          lastActive: u.lastActive
+        })),
         allOnlineUsers: Array.from(new Set([...socketUsers, ...dbOnlineUserIds]))
       });
     } catch (error) {
       console.error("Error in debug route:", error);
+      res.status(500).json({ error: error.message });
+    }
+  });
+  
+  // Route to manually clean up stale online statuses
+  app.get('/debug/cleanup-online-status', async (req, res) => {
+    try {
+      // Get current time
+      const now = new Date();
+      
+      // Set inactive time threshold (5 minutes)
+      const inactiveThreshold = new Date(now - 5 * 60 * 1000); // 5 minutes ago
+      
+      // Find users who are marked as online but haven't been active recently
+      const staleUsers = await User.find({
+        isOnline: true,
+        lastActive: { $lt: inactiveThreshold },
+        _id: { $nin: Array.from(onlineUsers.keys()) } // Don't affect socket-connected users
+      }).select('_id name lastActive');
+      
+      // Update these users to be offline
+      const updateResult = await User.updateMany(
+        { 
+          isOnline: true, 
+          lastActive: { $lt: inactiveThreshold },
+          _id: { $nin: Array.from(onlineUsers.keys()) }
+        },
+        { isOnline: false }
+      );
+      
+      // Broadcast updated online users
+      broadcastOnlineUsers();
+      
+      res.json({
+        message: "Cleaned up stale online statuses",
+        staleUsers: staleUsers.map(u => ({ 
+          id: u._id.toString(), 
+          name: u.name,
+          lastActive: u.lastActive,
+          inactiveFor: Math.round((now - u.lastActive) / 1000 / 60) + " minutes"
+        })),
+        updateResult
+      });
+    } catch (error) {
+      console.error("Error cleaning up online status:", error);
       res.status(500).json({ error: error.message });
     }
   });

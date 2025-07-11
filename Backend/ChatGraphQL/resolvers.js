@@ -74,6 +74,45 @@ module.exports = {
         throw new Error("Failed to send message");
       }
     },
+    
+    deleteMessage: async (_, { messageId }, context) => {
+      try {
+        const { io } = context;
+        
+        // Find the message first to get sender and receiver info
+        const message = await chatSchema.findById(messageId).populate("sender receiver");
+        
+        if (!message) {
+          throw new Error("Message not found");
+        }
+        
+        // Delete the message from the database
+        await chatSchema.findByIdAndDelete(messageId);
+        
+        // Emit socket event to notify clients about the deleted message
+        if (io) {
+          try {
+            // Format the message ID for socket transmission
+            const deleteInfo = {
+              messageId: messageId,
+              senderId: message.sender._id.toString(),
+              receiverId: message.receiver._id.toString()
+            };
+            
+            // Broadcast the delete event to all connected clients
+            io.emit("messageDeleted", deleteInfo);
+            console.log("Broadcasted message deletion to all clients:", deleteInfo);
+          } catch (socketError) {
+            console.error("Error emitting socket delete event:", socketError);
+          }
+        }
+        
+        return true; // Return success
+      } catch (error) {
+        console.error("Error deleting message:", error);
+        throw new Error("Failed to delete message");
+      }
+    },
   },
 };
 

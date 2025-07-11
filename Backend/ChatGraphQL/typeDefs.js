@@ -16,6 +16,7 @@ const typeDefs = gql`
 
   type Mutation {
     sendMessage(senderId: ID!, receiverId: ID!, message: String!): Message
+    deleteMessage(messageId: ID!): Boolean
   }
 `;
 
