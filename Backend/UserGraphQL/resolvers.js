@@ -23,7 +23,7 @@ const resolvers = {
 
   Query: {
     users: async () =>
-      await User.find().select('id name username email phone profileImage bio createTime'),
+      await User.find().select('id name username email phone profileImage bio createTime isOnline lastActive'),
 
       getMe: async (_ ,{userId}) =>{
         try{

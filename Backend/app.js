@@ -146,7 +146,57 @@ try {
 // Store `io` inside Express
 app.set("io", io);
 
+// Import User model for updating online status
+const User = require('./Models/user');
+
+// Track online users
 const onlineUsers = new Map();
+
+// Function to broadcast online users to all clients
+const broadcastOnlineUsers = async () => {
+  try {
+    // Get all online users from database as backup
+    const dbOnlineUsers = await User.find({ isOnline: true }).select('_id');
+    const dbOnlineUserIds = dbOnlineUsers.map(user => user._id.toString());
+    
+    // Combine socket-connected users with database online users
+    const allOnlineUserIds = new Set([
+      ...Array.from(onlineUsers.keys()),
+      ...dbOnlineUserIds
+    ]);
+    
+    console.log(`Broadcasting online users: ${Array.from(allOnlineUserIds)}`);
+    io.emit("updateOnlineUsers", Array.from(allOnlineUserIds));
+  } catch (error) {
+    console.error("Error broadcasting online users:", error);
+  }
+};
+
+// Periodically check and sync online users (every 30 seconds)
+setInterval(async () => {
+  try {
+    console.log("Performing periodic online users sync...");
+    
+    // Sync database with socket connections
+    for (const userId of onlineUsers.keys()) {
+      await User.findByIdAndUpdate(userId, { 
+        isOnline: true,
+        lastActive: new Date()
+      });
+    }
+    
+    // Debug: Log all online users from database
+    const dbOnlineUsers = await User.find({ isOnline: true }).select('_id name');
+    console.log("Users marked as online in database:", 
+      dbOnlineUsers.map(u => ({ id: u._id.toString(), name: u.name }))
+    );
+    
+    // Broadcast updated online users
+    broadcastOnlineUsers();
+  } catch (error) {
+    console.error("Error in periodic online users sync:", error);
+  }
+}, 30000);
 // Handle socket connections
 io.on("connection", (socket) => {
   try {
@@ -163,11 +213,19 @@ io.on("connection", (socket) => {
         socket.userId = userId;
         socket.join(userId);
         
-        console.log(`🟢 User ${userId} connected and joined room`);
-        console.log(`Current online users: ${Array.from(onlineUsers.keys())}`);
-        
-        // Broadcast updated online users list to all clients
-        io.emit("updateOnlineUsers", Array.from(onlineUsers.keys()));
+        // Update user's online status in database
+        User.findByIdAndUpdate(userId, { 
+          isOnline: true,
+          lastActive: new Date()
+        })
+        .then(() => {
+          console.log(`🟢 User ${userId} connected and joined room`);
+          console.log(`Current online users: ${Array.from(onlineUsers.keys())}`);
+          
+          // Broadcast updated online users list to all clients
+          broadcastOnlineUsers();
+        })
+        .catch(err => console.error("Error updating user online status:", err));
       } catch (error) {
         console.error("Error handling socket connection with userId:", error);
       }
@@ -188,11 +246,19 @@ io.on("connection", (socket) => {
         socket.userId = userId;
         onlineUsers.set(userId, socket.id);
         
-        console.log(`🟢 User explicitly joined room: ${userId}`);
-        console.log(`Current online users: ${Array.from(onlineUsers.keys())}`);
-        
-        // Broadcast updated online users list
-        io.emit("updateOnlineUsers", Array.from(onlineUsers.keys()));
+        // Update user's online status in database
+        User.findByIdAndUpdate(userId, { 
+          isOnline: true,
+          lastActive: new Date()
+        })
+        .then(() => {
+          console.log(`🟢 User explicitly joined room: ${userId}`);
+          console.log(`Current online users: ${Array.from(onlineUsers.keys())}`);
+          
+          // Broadcast updated online users list
+          broadcastOnlineUsers();
+        })
+        .catch(err => console.error("Error updating user online status:", err));
       } catch (error) {
         console.error("Error handling socket join:", error);
       }
@@ -206,12 +272,20 @@ io.on("connection", (socket) => {
         if (socket.userId) {
           console.log(`User ${socket.userId} went offline`);
           
-          // Remove user from online list
-          onlineUsers.delete(socket.userId);
-          
-          // Broadcast updated online users list
-          io.emit("updateOnlineUsers", Array.from(onlineUsers.keys()));
-          console.log(`Updated online users: ${Array.from(onlineUsers.keys())}`);
+          // Update user's offline status in database
+          User.findByIdAndUpdate(socket.userId, { 
+            isOnline: false,
+            lastActive: new Date()
+          })
+          .then(() => {
+            // Remove user from online list
+            onlineUsers.delete(socket.userId);
+            
+            // Broadcast updated online users list
+            broadcastOnlineUsers();
+            console.log(`Updated online users: ${Array.from(onlineUsers.keys())}`);
+          })
+          .catch(err => console.error("Error updating user offline status:", err));
         }
       } catch (error) {
         console.error("Error handling socket disconnect:", error);
@@ -254,6 +328,38 @@ async function startServer() {
 
    app.get('/', (req, res) => {
     res.send('🚀 Server is running...');
+  });
+  
+  // Debug route to check online users
+  app.get('/debug/online-users', async (req, res) => {
+    try {
+      // Get socket-connected users
+      const socketUsers = Array.from(onlineUsers.keys());
+      
+      // Get database online users
+      const dbOnlineUsers = await User.find({ isOnline: true }).select('_id name');
+      const dbOnlineUserIds = dbOnlineUsers.map(u => u._id.toString());
+      
+      // Force update all socket-connected users
+      for (const userId of socketUsers) {
+        await User.findByIdAndUpdate(userId, { 
+          isOnline: true,
+          lastActive: new Date()
+        });
+      }
+      
+      // Broadcast updated online users
+      broadcastOnlineUsers();
+      
+      res.json({
+        socketConnectedUsers: socketUsers,
+        databaseOnlineUsers: dbOnlineUsers.map(u => ({ id: u._id.toString(), name: u.name })),
+        allOnlineUsers: Array.from(new Set([...socketUsers, ...dbOnlineUserIds]))
+      });
+    } catch (error) {
+      console.error("Error in debug route:", error);
+      res.status(500).json({ error: error.message });
+    }
   });
 
   httpServer.listen(process.env.PORT || 5000, () => {

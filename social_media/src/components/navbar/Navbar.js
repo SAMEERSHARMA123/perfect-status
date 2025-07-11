@@ -31,6 +31,8 @@ const Navbar = () => {
       username
       bio
       profileImage
+      isOnline
+      lastActive
       followers { id }
       following { id }
       posts { id }

@@ -61,6 +61,8 @@ export default function Main() {
       username
       bio
       profileImage
+      isOnline
+      lastActive
       followers { id }
       following { id }
       posts { id }

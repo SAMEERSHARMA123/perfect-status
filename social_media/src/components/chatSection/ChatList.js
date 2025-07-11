@@ -684,6 +684,9 @@ const ChatList = ({ activeTab }) => {
       console.log("Received online users update:", users);
       // Create a Set for efficient lookups and avoid unnecessary re-renders
       setOnlineUsers(new Set(users));
+      
+      // Force refresh user list to update online status
+      getUser();
     });
 
     return () => {
@@ -702,6 +705,8 @@ const ChatList = ({ activeTab }) => {
             id
             name
             profileImage
+            isOnline
+            lastActive
           }
         }
       `;
@@ -715,7 +720,13 @@ const ChatList = ({ activeTab }) => {
           withCredentials: true,
         }
       );
-      setUsers(response.data.data.users);
+      const fetchedUsers = response.data.data.users;
+      console.log("Fetched users with online status:", fetchedUsers.map(u => ({
+        id: u.id,
+        name: u.name,
+        isOnline: u.isOnline
+      })));
+      setUsers(fetchedUsers);
     } catch (error) {
       console.error(error.response?.data?.errors?.[0]?.message || "Unknown error");
     }
@@ -934,12 +945,12 @@ const ChatList = ({ activeTab }) => {
                     alt={user.name}
                     className="w-12 h-12 rounded-full object-cover ring-2 ring-purple-100"
                   />
-                  <span className={`absolute -bottom-1 -right-1 w-3 h-3 rounded-full border-2 border-white ${onlineUsers.has(user.id) ? 'bg-green-500' : 'bg-gray-400'}`}></span>
+                  <span className={`absolute -bottom-1 -right-1 w-3 h-3 rounded-full border-2 border-white ${onlineUsers.has(user.id) || user.isOnline === true ? 'bg-green-500' : 'bg-gray-400'}`}></span>
                 </div>
                 <div className="ml-3 flex-1 min-w-0">
                   <h3 className="text-sm font-semibold text-gray-900 truncate">{user.name}</h3>
-                  <p className={`text-xs ${onlineUsers.has(user.id) ? 'text-green-500' : 'text-gray-400'} truncate`}>
-                    {onlineUsers.has(user.id) ? 'Online' : 'Offline'}
+                  <p className={`text-xs ${onlineUsers.has(user.id) || user.isOnline === true ? 'text-green-500' : 'text-gray-400'} truncate`}>
+                    {onlineUsers.has(user.id) || user.isOnline === true ? 'Online' : 'Offline'}
                   </p>
                 </div>
               </div>
@@ -968,9 +979,9 @@ const ChatList = ({ activeTab }) => {
                 />
                 <div className="ml-3">
                   <h2 className="text-lg font-semibold text-gray-900">{selectedChat.name}</h2>
-                  <p className={`text-xs flex items-center ${onlineUsers.has(selectedChat?.id) ? 'text-green-500' : 'text-gray-400'}`}>
-                    <span className={`inline-block w-2 h-2 rounded-full mr-1 ${onlineUsers.has(selectedChat?.id) ? 'bg-green-500' : 'bg-gray-400'}`}></span>
-                    {onlineUsers.has(selectedChat?.id) ? 'Online' : 'Offline'}
+                  <p className={`text-xs flex items-center ${onlineUsers.has(selectedChat?.id) || selectedChat?.isOnline === true ? 'text-green-500' : 'text-gray-400'}`}>
+                    <span className={`inline-block w-2 h-2 rounded-full mr-1 ${onlineUsers.has(selectedChat?.id) || selectedChat?.isOnline === true ? 'bg-green-500' : 'bg-gray-400'}`}></span>
+                    {onlineUsers.has(selectedChat?.id) || selectedChat?.isOnline === true ? 'Online' : 'Offline'}
                   </p>
                 </div>
               </div>
