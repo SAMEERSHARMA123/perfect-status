@@ -39,6 +39,18 @@ const userSchema = new mongoose.Schema({
     default: "",
   },
 
+  // Add online status field
+  isOnline: {
+    type: Boolean,
+    default: false,
+  },
+
+  // Add last active timestamp
+  lastActive: {
+    type: Date,
+    default: Date.now,
+  },
+
   followers: [
     {
       type: mongoose.Schema.Types.ObjectId,

@@ -150,39 +150,68 @@ const onlineUsers = new Map();
 // Handle socket connections
 io.on("connection", (socket) => {
   try {
+    console.log("⚡ Socket connected:", socket.id);
+    
+    // Get userId from query params (sent during connection)
     const userId = socket.handshake.query.userId;
-    if(userId) {
+    
+    // If userId exists in the connection query
+    if (userId) {
       try {
-        console.log("⚡ Socket connected:", socket.id);
+        // Store user as online
         onlineUsers.set(userId, socket.id);
         socket.userId = userId;
         socket.join(userId);
         
+        console.log(`🟢 User ${userId} connected and joined room`);
+        console.log(`Current online users: ${Array.from(onlineUsers.keys())}`);
+        
+        // Broadcast updated online users list to all clients
         io.emit("updateOnlineUsers", Array.from(onlineUsers.keys()));
       } catch (error) {
-        console.error("Error handling socket connection:", error);
+        console.error("Error handling socket connection with userId:", error);
       }
+    } else {
+      console.log("Socket connected without userId");
     }
     
+    // Handle explicit join events (when user logs in after socket connection)
     socket.on("join", (userId) => {
+      if (!userId) {
+        console.warn("Join event received without userId");
+        return;
+      }
+      
       try {
+        // Update socket data and room
         socket.join(userId);
         socket.userId = userId;
         onlineUsers.set(userId, socket.id);
-        console.log(`🟢 User joined room: ${userId}`);
-        io.emit("updateOnlineUsers", Array.from(onlineUsers.keys()));
         
+        console.log(`🟢 User explicitly joined room: ${userId}`);
+        console.log(`Current online users: ${Array.from(onlineUsers.keys())}`);
+        
+        // Broadcast updated online users list
+        io.emit("updateOnlineUsers", Array.from(onlineUsers.keys()));
       } catch (error) {
         console.error("Error handling socket join:", error);
       }
     });
 
+    // Handle disconnections
     socket.on("disconnect", () => {
       try {
         console.log("❌ Socket disconnected:", socket.id);
+        
         if (socket.userId) {
-          onlineUsers.delete(socket.userId); // ❌ remove user from online list
-          io.emit("updateOnlineUsers", Array.from(onlineUsers.keys())); // 🔁 broadcast update
+          console.log(`User ${socket.userId} went offline`);
+          
+          // Remove user from online list
+          onlineUsers.delete(socket.userId);
+          
+          // Broadcast updated online users list
+          io.emit("updateOnlineUsers", Array.from(onlineUsers.keys()));
+          console.log(`Updated online users: ${Array.from(onlineUsers.keys())}`);
         }
       } catch (error) {
         console.error("Error handling socket disconnect:", error);

@@ -15,6 +15,8 @@ const typeDefs = gql`
     token: String
     profileImage: String
     bio: String
+    isOnline: Boolean           # Online status field
+    lastActive: String          # Last active timestamp
     followers: [User]           # Suggestion System Support
     following: [User]           # Suggestion System Support
     posts: [Post]               # Added to support searchUsers query

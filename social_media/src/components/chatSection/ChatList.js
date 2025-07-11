@@ -659,28 +659,37 @@ const ChatList = ({ activeTab }) => {
   };
 
   useEffect(() => {
-     const usr = GetTokenFromCookie();
-    socket.emit("join",usr?.id.toString());
-    socket.on("updateOnlineUsers", (users) => {
-      const onlineSet = new Set(users); // ✅ fast lookup set
-      setOnlineUsers(new Set(users));
-    });
-
-    return () => {
-      socket.off("updateOnlineUsers");
-    };
-  }, []);
-
-  useEffect(() => {
     try {
       const decodedUser = GetTokenFromCookie(); // JWT se user decode
       if (decodedUser?.id) {
         setSender({ ...decodedUser, id: decodedUser.id.toString() });
-        socket.emit("join", decodedUser?.id);
+        
+        // Only emit join event once with proper ID
+        console.log("Joining socket with ID:", decodedUser.id.toString());
+        socket.emit("join", decodedUser.id.toString());
+      } else {
+        console.warn("No user ID found in token for socket join");
       }
     } catch (error) {
       console.error("Error decoding token or joining socket:", error);
     }
+  }, []);
+
+  // Separate useEffect for socket events to avoid dependency issues
+  useEffect(() => {
+    // Listen for online users updates
+    console.log("Setting up updateOnlineUsers listener");
+    
+    socket.on("updateOnlineUsers", (users) => {
+      console.log("Received online users update:", users);
+      // Create a Set for efficient lookups and avoid unnecessary re-renders
+      setOnlineUsers(new Set(users));
+    });
+
+    return () => {
+      // Clean up listener on component unmount
+      socket.off("updateOnlineUsers");
+    };
   }, []);
 
 
@@ -925,11 +934,13 @@ const ChatList = ({ activeTab }) => {
                     alt={user.name}
                     className="w-12 h-12 rounded-full object-cover ring-2 ring-purple-100"
                   />
-                  {onlineUsers.has(user.id) && <span className="absolute -bottom-1 -right-1 w-3 h-3 rounded-full border-2 border-white bg-green-500"></span>}
+                  <span className={`absolute -bottom-1 -right-1 w-3 h-3 rounded-full border-2 border-white ${onlineUsers.has(user.id) ? 'bg-green-500' : 'bg-gray-400'}`}></span>
                 </div>
                 <div className="ml-3 flex-1 min-w-0">
                   <h3 className="text-sm font-semibold text-gray-900 truncate">{user.name}</h3>
-                  <p className="text-sm text-gray-500 truncate">Tap to chat</p>
+                  <p className={`text-xs ${onlineUsers.has(user.id) ? 'text-green-500' : 'text-gray-400'} truncate`}>
+                    {onlineUsers.has(user.id) ? 'Online' : 'Offline'}
+                  </p>
                 </div>
               </div>
             </div>
@@ -957,7 +968,10 @@ const ChatList = ({ activeTab }) => {
                 />
                 <div className="ml-3">
                   <h2 className="text-lg font-semibold text-gray-900">{selectedChat.name}</h2>
-                  <p className={`text-xs ${onlineUsers.has(selectedChat?.id) ? 'text-green-500' : 'text-gray-400'}`}>{onlineUsers.has(selectedChat?.id) ? 'Online' : 'Offline'}</p>
+                  <p className={`text-xs flex items-center ${onlineUsers.has(selectedChat?.id) ? 'text-green-500' : 'text-gray-400'}`}>
+                    <span className={`inline-block w-2 h-2 rounded-full mr-1 ${onlineUsers.has(selectedChat?.id) ? 'bg-green-500' : 'bg-gray-400'}`}></span>
+                    {onlineUsers.has(selectedChat?.id) ? 'Online' : 'Offline'}
+                  </p>
                 </div>
               </div>
               <div className="flex items-center space-x-2 mb-[80px] md:mb-0 relative">
