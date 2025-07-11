@@ -867,6 +867,38 @@ const ChatList = ({ activeTab }) => {
         finalMessage = `> ${replyToMsg.message}\n${text}`;
         replyMeta = { replyToId: replyToMsg.id, replyToText: replyToMsg.message };
       }
+      
+      // Create a temporary message to display immediately
+      const tempMessage = {
+        id: `temp-${Date.now()}`,
+        message: finalMessage,
+        createdAt: Date.now().toString(),
+        sender: {
+          id: sender.id,
+          name: sender.name
+        },
+        receiver: {
+          id: selectedChat.id,
+          name: selectedChat.name
+        }
+      };
+      
+      // Add the temporary message to the UI immediately
+      setMessages(prev => [...prev, tempMessage]);
+      
+      // Scroll to bottom to show the new message
+      setTimeout(() => {
+        const chatContainer = document.querySelector('.overflow-y-auto');
+        if (chatContainer) {
+          chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+      }, 50);
+      
+      // Clear input after send
+      setText("");
+      setReplyToMsg(null);
+      
+      // Now send the message to the server
       const query = `
     mutation sendMessage($senderId: ID!, $receiverId: ID!, $message: String!) {
     sendMessage(senderId: $senderId, receiverId: $receiverId, message: $message) {
@@ -898,13 +930,19 @@ const ChatList = ({ activeTab }) => {
           withCredentials: true,
         }
       );
-      // No need to call getChat() as we'll receive the message via socket
-      // The socket will update our messages state automatically
       
-      setText(""); // Clear input after send
-      setReplyToMsg(null);
+      // Replace the temporary message with the real one from the server
+      if (response?.data?.data?.sendMessage) {
+        const realMessage = response.data.data.sendMessage;
+        setMessages(prev => prev.map(msg => 
+          msg.id === tempMessage.id ? realMessage : msg
+        ));
+      }
     } catch (error) {
       console.error(error.response?.data?.errors?.[0]?.message || "Unknown error");
+      // If there's an error, remove the temporary message
+      setMessages(prev => prev.filter(msg => !msg.id.startsWith('temp-')));
+      alert("Failed to send message. Please try again.");
     }
   }
   
@@ -960,9 +998,32 @@ const ChatList = ({ activeTab }) => {
         setMessages(prev => {
           // Check if this message is already in our list (to avoid duplicates)
           const messageExists = prev.some(existingMsg => existingMsg.id === msg.id);
+          
+          // Check if this is a message we sent (already in our state with a temp ID)
+          const isOurTempMessage = prev.some(existingMsg => 
+            existingMsg.id.startsWith('temp-') && 
+            existingMsg.message === msg.message &&
+            existingMsg.sender.id === msg.sender.id &&
+            existingMsg.receiver.id === msg.receiver.id
+          );
+          
           if (messageExists) {
             return prev;
           }
+          
+          // If this is our own message that we already added as a temp message,
+          // replace the temp message with the real one
+          if (isOurTempMessage && msg.sender.id === sender?.id) {
+            return prev.map(existingMsg => 
+              (existingMsg.id.startsWith('temp-') && 
+               existingMsg.message === msg.message &&
+               existingMsg.sender.id === msg.sender.id &&
+               existingMsg.receiver.id === msg.receiver.id) 
+                ? msg 
+                : existingMsg
+            );
+          }
+          
           return [...prev, msg];
         });
         
